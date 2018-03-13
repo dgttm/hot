@@ -1,0 +1,292 @@
+heat_template_version: pike
+
+description: showcase template
+
+parameters:
+  key_name:
+    type: string
+    description: Name of keypair to assign to servers
+    default: nghkey
+  image:
+    type: string
+    description: Name of image to use for servers
+    default: Ubuntu 16.04
+  flavor:
+    type: string
+    description: Flavor to use for servers
+    default: m1.small
+  public_net:
+    type: string
+    description: >
+      ID or name of public network for which floating IP addresses will be allocated
+    default: public
+  private_net_name:
+    type: string
+    description: Name of private network to be created
+    default: mynewnet
+  private_net_cidr:
+    type: string
+    description: Private network address (CIDR notation)
+    default: 192.168.50.0/24
+  private_net_gateway:
+    type: string
+    description: Private network gateway address
+    default: 192.168.50.1
+  private_net_pool_start:
+    type: string
+    description: Start of private network IP address allocation pool
+    default: 192.168.50.10
+  private_net_pool_end:
+    type: string
+    description: End of private network IP address allocation pool
+    default: 192.168.50.240
+  database_name:
+     type: string
+     description: Name of the app database
+     default: wordpress
+  database_user:
+     type: string
+     label: Database username
+     description: name of the db user
+     default: wordpress
+
+##############################################################
+resources:
+
+  wait_condition:
+    type: OS::Heat::WaitCondition
+    properties:
+      handle: { get_resource: wait_handle }
+      count: 1
+      timeout: 240
+
+  wait_handle:
+    type: OS::Heat::WaitConditionHandle
+
+  mysql_root_password:
+    type: OS::Heat::RandomString
+    properties:
+      length: 32
+      sequence: lettersdigits
+
+  database_password:
+    type: OS::Heat::RandomString
+    properties:
+      length: 32
+      sequence: lettersdigits
+
+#  database_password:
+#    type: OS::Heat::RandomString
+#    properties:
+#      length: 32
+#      sequence: lettersdigits
+
+  private_net:
+    type: OS::Neutron::Net
+    properties:
+      name: { get_param: private_net_name }
+
+  private_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: private_net }
+      cidr: { get_param: private_net_cidr }
+      gateway_ip: { get_param: private_net_gateway }
+      allocation_pools:
+        - start: { get_param: private_net_pool_start }
+          end: { get_param: private_net_pool_end }
+
+  router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info:
+        network: { get_param: public_net }
+
+  router_interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: router }
+      subnet_id: { get_resource: private_subnet }
+
+  server1:
+    type: OS::Nova::Server
+    properties:
+      name: webserver1
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key_name }
+      networks:
+        - port: { get_resource: server1_port }
+      user_data:
+        str_replace:
+          params:
+            __database_name__: { get_param: database_name }
+            __database_user__: { get_param: database_user }
+            __database_password__: { get_attr: [database_password, value] }
+            __mysql_ip__: { get_attr: [server2, first_address] }
+
+          template: |
+            #!/bin/bash
+            apt update
+            apt install -y wordpress php libapache2-mod-php php-mysql php-gd mysql-client php-curl php-gd php-mbstring php-mcrypt php-xml php-xmlrpc
+            # download wordpress
+            wget http://wordpress.org/latest.tar.gz
+            tar -xzf latest.tar.gz
+
+            # configure wordpress
+            cp wordpress/wp-config-sample.php wordpress/wp-config.php
+            sed -i 's/database_name_here/__database_name__/' wordpress/wp-config.php
+            sed -i 's/username_here/__database_user__/' wordpress/wp-config.php
+            sed -i 's/password_here/__database_password__/' wordpress/wp-config.php
+            sed -i 's/localhost/__mysql_ip__/' wordpress/wp-config.php
+
+            # install a copy of the configured wordpress into apache's www directory
+            rm /var/www/html/index.html
+            cp -R wordpress/* /var/www/html/
+
+            # give apache ownership of the application files
+            chown -R www-data:www-data /var/www/html/
+            chmod -R g+w /var/www/html/
+            sed -i ':a;N;$!ba;s/AllowOverride None/AllowOverride All/3' /etc/apache2/sites-available/default
+            sudo a2enmod rewrite
+            service apache2 restart
+
+            # notify heat that we are done here
+            wc_notify --data-binary '{"status": "SUCCESS"}'
+
+  server1_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: private_net }
+      fixed_ips:
+        - subnet_id: { get_resource: private_subnet }
+      security_groups: [{ get_resource: server_security_group }]
+      security_groups: [{ get_resource: server_security_group }, { get_resource: webserver_security_group}]
+
+  server1_floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: { get_param: public_net }
+      port_id: { get_resource: server1_port }
+
+  server2:
+    type: OS::Nova::Server
+    properties:
+      name: dbserver1
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key_name }
+      networks:
+        - port: { get_resource: server2_port }
+      user_data:
+        str_replace:
+          params:
+            __mysql_root_password__: { get_attr: [mysql_root_password, value] }
+            __database_name__: { get_param: database_name }
+            __database_user__: { get_param: database_user }
+            __database_password__: { get_attr: [database_password, value] }
+
+            wc_notify: { get_attr: ['wait_handle', 'curl_cli'] }
+          template: |
+            #!/bin/bash
+
+            # install MySQL
+            sleep 20
+            apt update
+            export DEBIAN_FRONTEND=noninteractive
+            apt install -y mysql-server
+            mysqladmin -u root password "__mysql_root_password__"
+            sed -i "s/bind-address.*/bind-address = 0.0.0.0/" /etc/mysql/mysql.conf.d/mysqld.cnf
+            service mysql restart
+            mysql -u root --password="__mysql_root_password__" <<EOF
+            CREATE DATABASE __database_name__;
+            CREATE USER '__database_user__'@'localhost';
+            SET PASSWORD FOR '__database_user__'@'localhost'=PASSWORD("__database_password__");
+            GRANT ALL PRIVILEGES ON __database_name__.* TO '__database_user__'@'localhost' IDENTIFIED BY '__database_password__';
+            CREATE USER '__database_user__'@'%';
+            SET PASSWORD FOR '__database_user__'@'%'=PASSWORD("__database_password__");
+            GRANT ALL PRIVILEGES ON __database_name__.* TO '__database_user__'@'%' IDENTIFIED BY '__database_password__';
+            FLUSH PRIVILEGES;
+            EOF
+            wc_notify --data-binary '{"status": "SUCCESS"}'
+
+  server2_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: private_net }
+      fixed_ips:
+        - subnet_id: { get_resource: private_subnet }
+      security_groups: [{ get_resource: server_security_group }, { get_resource: dbsecurity_group}]
+
+  server2_floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: { get_param: public_net }
+      port_id: { get_resource: server2_port }
+
+  server_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      description: Add security group rules for server
+      name: security-group
+      rules:
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 22
+          port_range_max: 22
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: icmp
+
+  webserver_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      description: Webserver services
+      name: webserver-services
+      rules:
+        # allow web services to communicate with me
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 80
+          port_range_max: 80
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 443
+          port_range_max: 443
+
+  dbsecurity_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: db_server_security_group
+      rules:
+        - protocol: tcp
+          port_range_min: 3306
+          port_range_max: 3306
+
+outputs:
+  server1_name:
+    description: Name of the instance.
+    value: { get_attr: [server1, name] }
+  server1_private_ip:
+    description: IP address of server1 in private network
+    value: { get_attr: [ server1, first_address ] }
+  server1_public_ip:
+    description: Floating IP address of server1 in public network
+    value: { get_attr: [ server1_floating_ip, floating_ip_address ] }
+  server2_private_ip:
+    description: IP address of server2 in private network
+    value: { get_attr: [ server2, first_address ] }
+  server2_public_ip:
+    description: Floating IP address of server2 in public network
+    value: { get_attr: [ server2_floating_ip, floating_ip_address ] }
+  server2_name:
+    description: Name of the  instance.
+    value: { get_attr: [server2, name] }
+  mysql_ip:
+    description: The IP address of the MySQL instance.
+    value: { get_attr: [server2, first_address] }
+  mysql_port:
+    description: The network port of the MySQL instance.
+    value: { get_resource: port }
+  database_password:
+    description: The MySQL database password.
+    value: { get_attr: [database_password, value] }
