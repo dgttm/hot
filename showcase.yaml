@@ -27,19 +27,19 @@ parameters:
   private_net_cidr:
     type: string
     description: Private network address (CIDR notation)
-    default: 192.168.50.0/24
+    default: 192.168.52.0/24
   private_net_gateway:
     type: string
     description: Private network gateway address
-    default: 192.168.50.1
+    default: 192.168.52.1
   private_net_pool_start:
     type: string
     description: Start of private network IP address allocation pool
-    default: 192.168.50.10
+    default: 192.168.52.10
   private_net_pool_end:
     type: string
     description: End of private network IP address allocation pool
-    default: 192.168.50.240
+    default: 192.168.52.240
   database_name:
      type: string
      description: Name of the app database
