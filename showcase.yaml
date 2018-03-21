@@ -2,6 +2,7 @@ heat_template_version: pike
 
 description: showcase template
 
+#########   Parameters ##########
 parameters:
   key_name:
     type: string
@@ -27,19 +28,19 @@ parameters:
   private_net_cidr:
     type: string
     description: Private network address (CIDR notation)
-    default: 192.168.52.0/24
+    default: 192.168.55.0/24
   private_net_gateway:
     type: string
     description: Private network gateway address
-    default: 192.168.52.1
+    default: 192.168.55.1
   private_net_pool_start:
     type: string
     description: Start of private network IP address allocation pool
-    default: 192.168.52.10
+    default: 192.168.55.10
   private_net_pool_end:
     type: string
     description: End of private network IP address allocation pool
-    default: 192.168.52.240
+    default: 192.168.55.240
   database_name:
      type: string
      description: Name of the app database
@@ -50,7 +51,8 @@ parameters:
      description: name of the db user
      default: wordpress
 
-##############################################################
+#########   Ressources ##########
+
 resources:
 
   wait_condition:
@@ -74,12 +76,6 @@ resources:
     properties:
       length: 32
       sequence: lettersdigits
-
-#  database_password:
-#    type: OS::Heat::RandomString
-#    properties:
-#      length: 32
-#      sequence: lettersdigits
 
   private_net:
     type: OS::Neutron::Net
@@ -262,6 +258,7 @@ resources:
           port_range_min: 3306
           port_range_max: 3306
 
+#########   Outputs ##########
 outputs:
   server1_name:
     description: Name of the instance.
