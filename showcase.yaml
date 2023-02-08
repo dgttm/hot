@@ -11,7 +11,7 @@ parameters:
   image:
     type: string
     description: Name of image to use for servers
-    default: Ubuntu 16.04
+    default: Ubuntu 22.04
   flavor:
     type: string
     description: Flavor to use for servers
